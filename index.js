@@ -58,8 +58,8 @@ app.get('/api/search', async (req, res) => {
     if (suburbs && listings.length > 0) {
       const selected = suburbs.split(',').map(s => s.trim().toLowerCase());
       const filtered = listings.filter(l => {
-        const city = (l.suburb || '').toLowerCase();
-        return selected.some(s => city.includes(s) || s.includes(city));
+        const city = (l.suburb || '').toLowerCase().trim();
+        return selected.some(s => city === s);
       });
       if (filtered.length > 0) listings = filtered;
     }
