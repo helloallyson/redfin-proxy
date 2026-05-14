@@ -84,7 +84,7 @@ app.get('/api/search', async (req, res) => {
 });
 
 async function searchCSV(f) {
-  const poly = `${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.south},${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.south}`;
+  const poly = `${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.south},${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.south},${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.south}`;
   const uipt = f.home_type === 'single family' ? '1' : f.home_type === 'condo' ? '2' : f.home_type === 'townhouse' ? '3' : '1,2,3';
   
   const params = new URLSearchParams({
@@ -109,7 +109,7 @@ async function searchCSV(f) {
 }
 
 async function searchJSON(f) {
-  const poly = `${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.south},${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.south}`;
+  const poly = `${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.south},${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.south},${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.south}`;
   const uipt = f.home_type === 'single family' ? '1' : f.home_type === 'condo' ? '2' : f.home_type === 'townhouse' ? '3' : '1,2,3';
   
   const params = new URLSearchParams({
@@ -232,7 +232,7 @@ app.get('/api/debug', async (req, res) => {
   
   // Test CSV
   try {
-    const csvUrl = 'https://www.redfin.com/stingray/api/gis-csv?al=1&status=1&min_price=300000&max_price=450000&num_beds=3&min_num_baths=1&num_homes=5&page_number=1&sp=true&v=8&uipt=1,2,3&poly=-93.92 41.45,-93.92 41.82,-93.38 41.82,-93.38 41.45';
+    const csvUrl = 'https://www.redfin.com/stingray/api/gis-csv?al=1&status=1&min_price=300000&max_price=450000&num_beds=3&min_num_baths=1&num_homes=5&page_number=1&sp=true&v=8&uipt=1,2,3&poly=-93.92 41.45,-93.92 41.82,-93.38 41.82,-93.38 41.45,-93.92 41.45';
     const r1 = await fetch(csvUrl, { headers: REDFIN_HEADERS, timeout: 15000 });
     const t1 = await r1.text();
     results.csv = { status: r1.status, length: t1.length, preview: t1.substring(0, 300), isHTML: t1.includes('<!DOCTYPE') };
@@ -240,7 +240,7 @@ app.get('/api/debug', async (req, res) => {
 
   // Test JSON
   try {
-    const jsonUrl = 'https://www.redfin.com/stingray/api/gis?al=1&status=1&min_price=300000&max_price=450000&num_beds=3&min_num_baths=1&num_homes=5&page_number=1&sp=true&v=8&uipt=1,2,3&render=json&poly=-93.92 41.45,-93.92 41.82,-93.38 41.82,-93.38 41.45';
+    const jsonUrl = 'https://www.redfin.com/stingray/api/gis?al=1&status=1&min_price=300000&max_price=450000&num_beds=3&min_num_baths=1&num_homes=5&page_number=1&sp=true&v=8&uipt=1,2,3&render=json&poly=-93.92 41.45,-93.92 41.82,-93.38 41.82,-93.38 41.45,-93.92 41.45';
     const r2 = await fetch(jsonUrl, { headers: REDFIN_HEADERS, timeout: 15000 });
     const t2 = await r2.text();
     results.json = { status: r2.status, length: t2.length, preview: t2.substring(0, 300), isHTML: t2.includes('<!DOCTYPE') };
