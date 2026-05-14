@@ -6,339 +6,258 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Redfin Stingray API headers to mimic a browser
 const REDFIN_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept': '*/*',
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
-  'Referer': 'https://www.redfin.com/',
-  'Origin': 'https://www.redfin.com'
+  'Connection': 'keep-alive',
+  'Cache-Control': 'no-cache'
 };
 
-// Des Moines metro area zip codes mapped to suburbs
-const SUBURB_ZIPS = {
-  'Des Moines': ['50309', '50310', '50311', '50312', '50313', '50314', '50315', '50316', '50317', '50320', '50321'],
-  'West Des Moines': ['50265', '50266'],
-  'Ankeny': ['50021', '50023'],
-  'Urbandale': ['50322', '50323'],
-  'Waukee': ['50263'],
-  'Johnston': ['50131'],
-  'Clive': ['50325'],
-  'Grimes': ['50111'],
-  'Norwalk': ['50211'],
-  'Altoona': ['50009'],
-  'Pleasant Hill': ['50327'],
-  'Bondurant': ['50035'],
-  'Carlisle': ['50047'],
-  'Indianola': ['50125'],
-  'Adel': ['50003'],
-  'Van Meter': ['50261'],
-  'Polk City': ['50226'],
-  'Windsor Heights': ['50324'],
-  'Cumming': ['50061'],
-  'Mitchellville': ['50169']
+const DSM_METRO_BOUNDS = {
+  south: 41.45, north: 41.82,
+  west: -93.92, east: -93.38
 };
 
-// Use the Redfin CSV download endpoint which is the most reliable
-// We'll search by the broader Des Moines metro bounding box
 app.get('/api/search', async (req, res) => {
   try {
     const {
-      min_price = 200000,
-      max_price = 500000,
-      min_beds = 3,
-      min_baths = 1,
-      min_sqft,
-      max_sqft,
-      home_type,
-      suburbs // comma-separated suburb names
+      min_price = 200000, max_price = 500000,
+      min_beds = 3, min_baths = 1,
+      min_sqft, max_sqft, home_type, suburbs
     } = req.query;
 
-    // Build zip code list from selected suburbs
-    let zipCodes = [];
-    if (suburbs) {
-      const selectedSuburbs = suburbs.split(',').map(s => s.trim());
-      selectedSuburbs.forEach(suburb => {
-        if (SUBURB_ZIPS[suburb]) {
-          zipCodes.push(...SUBURB_ZIPS[suburb]);
-        }
-      });
-    } else {
-      // All zips
-      Object.values(SUBURB_ZIPS).forEach(zips => zipCodes.push(...zips));
+    console.log('Search request:', req.query);
+    let listings = [];
+    let method = '';
+    let debugInfo = {};
+
+    // Approach 1: CSV
+    try {
+      console.log('Trying CSV...');
+      listings = await searchCSV({ min_price, max_price, min_beds, min_baths, min_sqft, max_sqft, home_type });
+      if (listings.length > 0) method = 'csv';
+    } catch (err) {
+      debugInfo.csvError = err.message;
+      console.warn('CSV failed:', err.message);
     }
 
-    // Search using the gis-csv endpoint with region-based search
-    // We'll use the broader Polk County / Dallas County approach
-    // region_type: 5 = county, 6 = zip, 2 = city
-    // status: 1 = active/for sale, 9 = all
-    
-    // Build params for the stingray GIS search
-    const params = new URLSearchParams({
-      al: 1,
-      status: 1, // Active/For Sale ONLY
-      min_price: min_price,
-      max_price: max_price,
-      num_beds: min_beds,
-      min_num_baths: min_baths,
-      region_type: 6, // zip code
-      num_homes: 350,
-      page_number: 1,
-      sp: true,
-      v: 8,
-      uipt: '1,2,3', // 1=house, 2=condo, 3=townhouse
-      render: 'csv'
-    });
-
-    if (min_sqft) params.set('min_listing_approx_size', min_sqft);
-    if (max_sqft) params.set('max_listing_approx_size', max_sqft);
-
-    // Property type filter
-    if (home_type === 'single family') params.set('uipt', '1');
-    else if (home_type === 'townhouse') params.set('uipt', '3');
-    else if (home_type === 'condo') params.set('uipt', '2');
-
-    // We'll make requests per zip code cluster and merge results
-    // Group zips into batches to reduce API calls
-    const allListings = [];
-    const errors = [];
-
-    // Process zips in parallel batches of 5
-    const batchSize = 5;
-    for (let i = 0; i < zipCodes.length; i += batchSize) {
-      const batch = zipCodes.slice(i, i + batchSize);
-      const batchPromises = batch.map(async (zip) => {
-        try {
-          const zipParams = new URLSearchParams(params);
-          zipParams.set('region_id', zip);
-          zipParams.set('region_type', 2); // Use type 2 for zip-based search
-          
-          const url = `https://www.redfin.com/stingray/api/gis-csv?${zipParams.toString()}`;
-          console.log(`Fetching zip ${zip}...`);
-          
-          const response = await fetch(url, {
-            headers: REDFIN_HEADERS,
-            timeout: 15000
-          });
-
-          if (!response.ok) {
-            console.warn(`Zip ${zip} returned ${response.status}`);
-            return [];
-          }
-
-          const csvText = await response.text();
-          if (!csvText || csvText.includes('<!DOCTYPE') || csvText.length < 50) {
-            return [];
-          }
-
-          return parseCSV(csvText, zip);
-        } catch (err) {
-          console.warn(`Error fetching zip ${zip}:`, err.message);
-          return [];
-        }
-      });
-
-      const batchResults = await Promise.all(batchPromises);
-      batchResults.forEach(listings => allListings.push(...listings));
-      
-      // Small delay between batches to be respectful
-      if (i + batchSize < zipCodes.length) {
-        await new Promise(r => setTimeout(r, 500));
-      }
-    }
-
-    // If zip-based search didn't work, try the bounding box approach
-    if (allListings.length === 0) {
-      console.log('Zip search returned 0 results, trying bounding box...');
+    // Approach 2: JSON
+    if (listings.length === 0) {
       try {
-        // Des Moines metro bounding box (roughly)
-        const bboxParams = new URLSearchParams(params);
-        bboxParams.delete('region_id');
-        bboxParams.delete('region_type');
-        // lat/lng bounding box for Des Moines metro
-        bboxParams.set('poly', '-93.85 41.45,-93.85 41.75,-93.4 41.75,-93.4 41.45');
-        bboxParams.set('render', 'csv');
-        
-        const url = `https://www.redfin.com/stingray/api/gis-csv?${bboxParams.toString()}`;
-        console.log('Trying bounding box search...');
-        
-        const response = await fetch(url, {
-          headers: REDFIN_HEADERS,
-          timeout: 20000
-        });
-
-        if (response.ok) {
-          const csvText = await response.text();
-          if (csvText && !csvText.includes('<!DOCTYPE') && csvText.length > 50) {
-            const parsed = parseCSV(csvText);
-            allListings.push(...parsed);
-          }
-        }
+        console.log('Trying JSON...');
+        listings = await searchJSON({ min_price, max_price, min_beds, min_baths, min_sqft, max_sqft, home_type });
+        if (listings.length > 0) method = 'json';
       } catch (err) {
-        errors.push('Bounding box fallback failed: ' + err.message);
+        debugInfo.jsonError = err.message;
+        console.warn('JSON failed:', err.message);
       }
     }
 
-    // Deduplicate by address
+    // Filter by suburbs
+    if (suburbs && listings.length > 0) {
+      const selected = suburbs.split(',').map(s => s.trim().toLowerCase());
+      const filtered = listings.filter(l => {
+        const city = (l.suburb || '').toLowerCase();
+        return selected.some(s => city.includes(s) || s.includes(city));
+      });
+      if (filtered.length > 0) listings = filtered;
+    }
+
+    // Deduplicate
     const seen = new Set();
-    const unique = allListings.filter(l => {
-      if (seen.has(l.address)) return false;
-      seen.add(l.address);
+    listings = listings.filter(l => {
+      const key = l.address.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     });
 
-    // Filter by selected suburbs if specified
-    let filtered = unique;
-    if (suburbs) {
-      const selectedSuburbs = suburbs.split(',').map(s => s.trim().toLowerCase());
-      filtered = unique.filter(l => {
-        const city = (l.suburb || '').toLowerCase();
-        return selectedSuburbs.some(s => city.includes(s.toLowerCase()) || s.toLowerCase().includes(city));
-      });
-      // If suburb filtering removed too many, include all
-      if (filtered.length === 0) filtered = unique;
-    }
+    listings.sort((a, b) => a.price - b.price);
+    console.log(`Returning ${listings.length} via ${method}`);
 
-    // Sort by price
-    filtered.sort((a, b) => a.price - b.price);
-
-    res.json({
-      success: true,
-      count: filtered.length,
-      listings: filtered.slice(0, 100),
-      debug: {
-        zipsSearched: zipCodes.length,
-        totalBeforeDedup: allListings.length,
-        totalAfterDedup: unique.length,
-        errors: errors
-      }
-    });
-
+    res.json({ success: listings.length > 0, count: listings.length, method, listings: listings.slice(0, 100), debug: debugInfo });
   } catch (err) {
     console.error('Search error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Also support the Redfin location search to resolve region IDs
-app.get('/api/location', async (req, res) => {
-  try {
-    const { query } = req.query;
-    const url = `https://www.redfin.com/stingray/do/location-autocomplete?location=${encodeURIComponent(query)}&v=2`;
-    
-    const response = await fetch(url, { headers: REDFIN_HEADERS });
-    const text = await response.text();
-    // Redfin prepends "{}&&" to JSONP responses
-    const json = JSON.parse(text.replace(/^{}&&/, ''));
-    res.json(json);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+async function searchCSV(f) {
+  const poly = `${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.south},${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.south}`;
+  const uipt = f.home_type === 'single family' ? '1' : f.home_type === 'condo' ? '2' : f.home_type === 'townhouse' ? '3' : '1,2,3';
+  
+  const params = new URLSearchParams({
+    al: 1, status: 1, min_price: f.min_price, max_price: f.max_price,
+    num_beds: f.min_beds, min_num_baths: f.min_baths,
+    num_homes: 350, page_number: 1, sp: true, v: 8, uipt, poly
+  });
+  if (f.min_sqft) params.set('min_listing_approx_size', f.min_sqft);
+  if (f.max_sqft) params.set('max_listing_approx_size', f.max_sqft);
+
+  const url = `https://www.redfin.com/stingray/api/gis-csv?${params}`;
+  console.log('CSV URL:', url);
+  
+  const resp = await fetch(url, { headers: REDFIN_HEADERS, timeout: 20000 });
+  const text = await resp.text();
+  console.log('CSV status:', resp.status, 'len:', text.length, 'preview:', text.substring(0, 150));
+  
+  if (!resp.ok || text.includes('<!DOCTYPE') || text.length < 100) {
+    throw new Error(`Bad CSV response: status=${resp.status} len=${text.length}`);
   }
-});
+  return parseCSV(text);
+}
 
-// Health check
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'House Hunter DSM - Redfin Proxy' });
-});
+async function searchJSON(f) {
+  const poly = `${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.south},${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.south}`;
+  const uipt = f.home_type === 'single family' ? '1' : f.home_type === 'condo' ? '2' : f.home_type === 'townhouse' ? '3' : '1,2,3';
+  
+  const params = new URLSearchParams({
+    al: 1, status: 1, min_price: f.min_price, max_price: f.max_price,
+    num_beds: f.min_beds, min_num_baths: f.min_baths,
+    num_homes: 100, page_number: 1, sp: true, v: 8, uipt, poly, render: 'json'
+  });
+  if (f.min_sqft) params.set('min_listing_approx_size', f.min_sqft);
+  if (f.max_sqft) params.set('max_listing_approx_size', f.max_sqft);
 
-// Parse Redfin CSV response into listing objects
-function parseCSV(csvText, zipHint) {
+  const url = `https://www.redfin.com/stingray/api/gis?${params}`;
+  console.log('JSON URL:', url);
+  
+  const resp = await fetch(url, { headers: REDFIN_HEADERS, timeout: 20000 });
+  let text = await resp.text();
+  console.log('JSON status:', resp.status, 'len:', text.length, 'preview:', text.substring(0, 200));
+  
+  if (!resp.ok || text.includes('<!DOCTYPE')) {
+    throw new Error(`Bad JSON response: status=${resp.status}`);
+  }
+
+  // Redfin prepends "{}&&"
+  text = text.replace(/^{}&&/, '').trim();
+  const data = JSON.parse(text);
+  const homes = data.payload?.homes || [];
+  console.log('Parsed', homes.length, 'homes from JSON');
+
+  return homes.map(h => {
+    const street = typeof h.streetLine === 'object' ? h.streetLine.value : (h.streetLine || '');
+    const city = h.city || '';
+    const state = h.state || 'IA';
+    const zip = h.zip || '';
+    const price = typeof h.price === 'object' ? h.price.value : (h.price || 0);
+    const sqft = typeof h.sqFt === 'object' ? h.sqFt.value : (h.sqFt || null);
+    const yr = typeof h.yearBuilt === 'object' ? h.yearBuilt.value : (h.yearBuilt || null);
+    const dom = h.dom ? (typeof h.dom === 'object' ? h.dom.value : h.dom) : null;
+    const lat = h.latLong?.value?.latitude || h.latitude || null;
+    const lng = h.latLong?.value?.longitude || h.longitude || null;
+    const mlsId = typeof h.mlsId === 'object' ? h.mlsId.value : (h.mlsId || null);
+    const hoa = typeof h.hoa === 'object' ? h.hoa.value : (h.hoa || null);
+    const lot = typeof h.lotSize === 'object' ? h.lotSize.value : (h.lotSize || null);
+    const redUrl = h.url ? `https://www.redfin.com${h.url}` : '';
+    
+    return {
+      address: [street, city, state, zip].filter(Boolean).join(', '),
+      suburb: city || 'Unknown',
+      price, beds: h.beds || 0, baths: h.baths || 0,
+      sqft, yearBuilt: yr, url: redUrl, source: 'Redfin',
+      daysOnMarket: dom, lot, hoa, lat, lng,
+      mlsNumber: mlsId, status: 'Active'
+    };
+  }).filter(l => l.price > 0 && l.address.length > 5);
+}
+
+function parseCSV(csvText) {
   const lines = csvText.split('\n');
   if (lines.length < 2) return [];
-  
-  // Parse header
   const headers = parseCSVLine(lines[0]);
   const listings = [];
   
   for (let i = 1; i < lines.length; i++) {
     if (!lines[i].trim()) continue;
-    
     const values = parseCSVLine(lines[i]);
     const row = {};
-    headers.forEach((h, idx) => {
-      row[h.trim()] = (values[idx] || '').trim();
-    });
+    headers.forEach((h, idx) => { row[h.trim().toUpperCase()] = (values[idx] || '').trim(); });
     
-    // Map to our listing format
     const address = row['ADDRESS'] || row['STREET ADDRESS'] || '';
     const city = row['CITY'] || '';
     const state = row['STATE OR PROVINCE'] || row['STATE'] || 'IA';
     const zip = row['ZIP OR POSTAL CODE'] || row['ZIP'] || '';
-    const price = parseInt(row['PRICE'] || row['LIST PRICE'] || '0');
+    const price = parseInt((row['PRICE'] || row['LIST PRICE'] || '0').replace(/[^0-9]/g, ''));
     const beds = parseInt(row['BEDS'] || row['BEDROOMS'] || '0');
     const baths = parseFloat(row['BATHS'] || row['BATHROOMS'] || '0');
-    const sqft = parseInt(row['SQUARE FEET'] || row['SQFT'] || '0');
+    const sqft = parseInt((row['SQUARE FEET'] || row['SQFT'] || '0').replace(/[^0-9]/g, '')) || null;
     const yearBuilt = parseInt(row['YEAR BUILT'] || '0') || null;
+    const dom = row['DAYS ON MARKET'] || '';
     const lot = row['LOT SIZE'] || '';
-    const daysOnMarket = row['DAYS ON MARKET'] || '';
-    const redfUrl = row['URL (SEE https://www.redfin.com/buy-a-home/comparative-market-analysis FOR INFO ON PRICING)'] 
-                    || row['URL'] || '';
-    const status = row['STATUS'] || row['SALE TYPE'] || '';
-    const lat = parseFloat(row['LATITUDE'] || '0');
-    const lng = parseFloat(row['LONGITUDE'] || '0');
-    const mlsNum = row['MLS#'] || row['MLS NUMBER'] || '';
     const hoa = row['HOA/MONTH'] || '';
+    const lat = parseFloat(row['LATITUDE'] || '0') || null;
+    const lng = parseFloat(row['LONGITUDE'] || '0') || null;
+    const mls = row['MLS#'] || row['MLS NUMBER'] || '';
+    const status = row['STATUS'] || row['SALE TYPE'] || '';
     
-    if (!address || !price) continue;
-    
-    // Only include active listings
-    const statusLower = status.toLowerCase();
-    if (statusLower.includes('sold') || statusLower.includes('pending') || statusLower.includes('contingent')) {
-      continue;
+    let redfUrl = '';
+    for (const key of Object.keys(row)) {
+      if (key.startsWith('URL')) { redfUrl = row[key]; break; }
     }
     
-    const fullAddress = [address, city, state, zip].filter(Boolean).join(', ');
-    
+    if (!address || !price) continue;
+    const sl = status.toLowerCase();
+    if (sl.includes('sold') || sl.includes('pending') || sl.includes('contingent')) continue;
+
     listings.push({
-      address: fullAddress,
-      suburb: city || 'Unknown',
-      price,
-      beds,
-      baths,
-      sqft: sqft || null,
-      yearBuilt,
+      address: [address, city, state, zip].filter(Boolean).join(', '),
+      suburb: city || 'Unknown', price, beds, baths, sqft, yearBuilt,
       url: redfUrl.startsWith('http') ? redfUrl : (redfUrl ? `https://www.redfin.com${redfUrl}` : ''),
-      source: 'Redfin',
-      daysOnMarket: daysOnMarket ? parseInt(daysOnMarket) : null,
-      lot: lot || null,
-      hoa: hoa || null,
-      mlsNumber: mlsNum || null,
-      lat: lat || null,
-      lng: lng || null,
-      status: status || 'Active'
+      source: 'Redfin', daysOnMarket: dom ? parseInt(dom) : null,
+      lot: lot || null, hoa: hoa || null, mlsNumber: mls || null,
+      lat, lng, status: status || 'Active'
     });
   }
-  
   return listings;
 }
 
-// Proper CSV line parser that handles quoted fields
 function parseCSVLine(line) {
-  const result = [];
-  let current = '';
-  let inQuotes = false;
-  
+  const result = []; let current = ''; let inQ = false;
   for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (char === ',' && !inQuotes) {
-      result.push(current);
-      current = '';
-    } else {
-      current += char;
-    }
+    const c = line[i];
+    if (c === '"') { if (inQ && line[i+1] === '"') { current += '"'; i++; } else { inQ = !inQ; } }
+    else if (c === ',' && !inQ) { result.push(current); current = ''; }
+    else { current += c; }
   }
   result.push(current);
   return result;
 }
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Redfin proxy running on port ${PORT}`);
+// Debug endpoint
+app.get('/api/debug', async (req, res) => {
+  const results = {};
+  
+  // Test CSV
+  try {
+    const csvUrl = 'https://www.redfin.com/stingray/api/gis-csv?al=1&status=1&min_price=300000&max_price=450000&num_beds=3&min_num_baths=1&num_homes=5&page_number=1&sp=true&v=8&uipt=1,2,3&poly=-93.92 41.45,-93.92 41.82,-93.38 41.82,-93.38 41.45';
+    const r1 = await fetch(csvUrl, { headers: REDFIN_HEADERS, timeout: 15000 });
+    const t1 = await r1.text();
+    results.csv = { status: r1.status, length: t1.length, preview: t1.substring(0, 300), isHTML: t1.includes('<!DOCTYPE') };
+  } catch (e) { results.csv = { error: e.message }; }
+
+  // Test JSON
+  try {
+    const jsonUrl = 'https://www.redfin.com/stingray/api/gis?al=1&status=1&min_price=300000&max_price=450000&num_beds=3&min_num_baths=1&num_homes=5&page_number=1&sp=true&v=8&uipt=1,2,3&render=json&poly=-93.92 41.45,-93.92 41.82,-93.38 41.82,-93.38 41.45';
+    const r2 = await fetch(jsonUrl, { headers: REDFIN_HEADERS, timeout: 15000 });
+    const t2 = await r2.text();
+    results.json = { status: r2.status, length: t2.length, preview: t2.substring(0, 300), isHTML: t2.includes('<!DOCTYPE') };
+  } catch (e) { results.json = { error: e.message }; }
+
+  // Test basic redfin access
+  try {
+    const r3 = await fetch('https://www.redfin.com/city/5415/IA/Des-Moines', { headers: REDFIN_HEADERS, timeout: 10000 });
+    results.pageAccess = { status: r3.status, length: (await r3.text()).length };
+  } catch (e) { results.pageAccess = { error: e.message }; }
+
+  res.json(results);
 });
+
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', service: 'House Hunter DSM - Redfin Proxy' });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Redfin proxy running on port ${PORT}`));
