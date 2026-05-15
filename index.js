@@ -14,29 +14,28 @@ const REDFIN_HEADERS = {
   'Cache-Control': 'no-cache'
 };
 
-// Bounding boxes for each suburb (lat/lng coordinates)
-// These can't be wrong because they're just geographic coordinates
+// Bounding boxes for each suburb - expanded to cover full city limits
 const SUBURB_BOUNDS = {
-  'Des Moines':      { s: 41.50, n: 41.65, w: -93.72, e: -93.52 },
-  'West Des Moines': { s: 41.53, n: 41.60, w: -93.82, e: -93.68 },
-  'Ankeny':          { s: 41.70, n: 41.78, w: -93.64, e: -93.55 },
-  'Urbandale':       { s: 41.60, n: 41.66, w: -93.78, e: -93.68 },
-  'Waukee':          { s: 41.58, n: 41.64, w: -93.92, e: -93.82 },
-  'Johnston':        { s: 41.65, n: 41.72, w: -93.74, e: -93.66 },
-  'Clive':           { s: 41.59, n: 41.62, w: -93.82, e: -93.75 },
-  'Grimes':          { s: 41.67, n: 41.73, w: -93.82, e: -93.74 },
-  'Norwalk':         { s: 41.45, n: 41.51, w: -93.72, e: -93.63 },
-  'Altoona':         { s: 41.62, n: 41.67, w: -93.50, e: -93.43 },
-  'Pleasant Hill':   { s: 41.56, n: 41.61, w: -93.55, e: -93.48 },
-  'Bondurant':       { s: 41.68, n: 41.73, w: -93.48, e: -93.42 },
-  'Carlisle':        { s: 41.48, n: 41.53, w: -93.52, e: -93.45 },
-  'Indianola':       { s: 41.33, n: 41.39, w: -93.60, e: -93.52 },
-  'Adel':            { s: 41.59, n: 41.65, w: -94.05, e: -93.97 },
-  'Van Meter':       { s: 41.51, n: 41.55, w: -93.97, e: -93.92 },
-  'Polk City':       { s: 41.75, n: 41.80, w: -93.74, e: -93.68 },
-  'Windsor Heights': { s: 41.59, n: 41.61, w: -93.72, e: -93.68 },
-  'Cumming':         { s: 41.47, n: 41.50, w: -93.87, e: -93.82 },
-  'Mitchellville':   { s: 41.65, n: 41.69, w: -93.38, e: -93.33 }
+  'Des Moines':      { s: 41.48, n: 41.66, w: -93.74, e: -93.49 },
+  'West Des Moines': { s: 41.52, n: 41.61, w: -93.84, e: -93.66 },
+  'Ankeny':          { s: 41.69, n: 41.80, w: -93.66, e: -93.53 },
+  'Urbandale':       { s: 41.59, n: 41.67, w: -93.80, e: -93.66 },
+  'Waukee':          { s: 41.56, n: 41.65, w: -93.94, e: -93.80 },
+  'Johnston':        { s: 41.63, n: 41.74, w: -93.76, e: -93.64 },
+  'Clive':           { s: 41.58, n: 41.63, w: -93.82, e: -93.73 },
+  'Grimes':          { s: 41.66, n: 41.74, w: -93.84, e: -93.72 },
+  'Norwalk':         { s: 41.43, n: 41.52, w: -93.74, e: -93.61 },
+  'Altoona':         { s: 41.61, n: 41.68, w: -93.52, e: -93.42 },
+  'Pleasant Hill':   { s: 41.55, n: 41.62, w: -93.56, e: -93.46 },
+  'Bondurant':       { s: 41.67, n: 41.74, w: -93.50, e: -93.40 },
+  'Carlisle':        { s: 41.46, n: 41.54, w: -93.53, e: -93.44 },
+  'Indianola':       { s: 41.32, n: 41.40, w: -93.61, e: -93.51 },
+  'Adel':            { s: 41.58, n: 41.66, w: -94.07, e: -93.95 },
+  'Van Meter':       { s: 41.50, n: 41.56, w: -93.98, e: -93.90 },
+  'Polk City':       { s: 41.74, n: 41.81, w: -93.76, e: -93.67 },
+  'Windsor Heights': { s: 41.58, n: 41.62, w: -93.73, e: -93.67 },
+  'Cumming':         { s: 41.45, n: 41.51, w: -93.88, e: -93.81 },
+  'Mitchellville':   { s: 41.64, n: 41.70, w: -93.39, e: -93.32 }
 };
 
 // Search a single suburb via CSV using bounding box
