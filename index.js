@@ -115,8 +115,14 @@ app.get('/api/search', async (req, res) => {
         batch.map(async (suburb) => {
           try {
             const listings = await searchSuburb(suburb, filters);
-            suburbResults[suburb] = listings.length;
-            return listings;
+            // Filter to only homes actually in this suburb (bounding box may catch neighbors)
+            const filtered = listings.filter(l => {
+              const city = (l.suburb || '').toLowerCase().trim();
+              const target = suburb.toLowerCase().trim();
+              return city === target;
+            });
+            suburbResults[suburb] = filtered.length;
+            return filtered;
           } catch (err) {
             console.warn(`Error searching ${suburb}:`, err.message);
             suburbResults[suburb] = 0;
