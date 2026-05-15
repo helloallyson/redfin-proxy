@@ -69,16 +69,12 @@ async function resolveRegionId(suburbName) {
 // Search a single suburb via CSV download
 async function searchSuburbCSV(suburbName, filters) {
   const info = SUBURB_INFO[suburbName];
-  
-  // First try to resolve the actual region ID
-  let regionId = info ? info.id : null;
-  const resolvedId = await resolveRegionId(suburbName);
-  if (resolvedId) regionId = resolvedId;
-  
-  if (!regionId) {
-    console.warn(`No region ID for ${suburbName}, skipping`);
+  if (!info) {
+    console.warn(`No info for ${suburbName}, skipping`);
     return [];
   }
+  
+  const regionId = info.id;
 
   const uipt = filters.home_type === 'single family' ? '1' : 
                filters.home_type === 'condo' ? '2' : 
@@ -309,5 +305,47 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'House Hunter DSM - Redfin Proxy v3' });
 });
 
+// Resolve all region IDs on startup (runs once, logs correct IDs)
+async function resolveAllRegions() {
+  console.log('Resolving region IDs for all suburbs...');
+  for (const [name, info] of Object.entries(SUBURB_INFO)) {
+    try {
+      const url = `https://www.redfin.com/stingray/do/location-autocomplete?location=${encodeURIComponent(name + ', IA')}&v=2`;
+      const resp = await fetch(url, { headers: REDFIN_HEADERS, timeout: 10000 });
+      const text = await resp.text();
+      const json = JSON.parse(text.replace(/^{}&&/, ''));
+      
+      if (json.payload && json.payload.sections) {
+        for (const section of json.payload.sections) {
+          if (section.rows) {
+            for (const row of section.rows) {
+              if (row.type === 6 && row.subName && row.subName.includes('IA')) {
+                if (row.id !== info.id) {
+                  console.log(`UPDATE ${name}: ${info.id} -> ${row.id}`);
+                  SUBURB_INFO[name].id = row.id;
+                } else {
+                  console.log(`OK ${name}: ${info.id}`);
+                }
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`Could not resolve ${name}:`, err.message);
+    }
+    // Small delay between lookups
+    await new Promise(r => setTimeout(r, 200));
+  }
+  console.log('Region resolution complete. Current IDs:', 
+    Object.fromEntries(Object.entries(SUBURB_INFO).map(([k,v]) => [k, v.id]))
+  );
+}
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Redfin proxy v3 running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Redfin proxy v3 running on port ${PORT}`);
+  // Resolve correct region IDs in the background
+  resolveAllRegions().catch(err => console.warn('Startup resolve failed:', err.message));
+});
