@@ -14,11 +14,111 @@ const REDFIN_HEADERS = {
   'Cache-Control': 'no-cache'
 };
 
-const DSM_METRO_BOUNDS = {
-  south: 41.45, north: 41.82,
-  west: -93.92, east: -93.38
+// Redfin city URL slugs and IDs for Des Moines metro
+// These come from redfin.com/city/{id}/IA/{City-Name} URLs
+// region_type=6 is city
+const SUBURB_INFO = {
+  'Des Moines':      { slug: 'Des-Moines', id: 5415 },
+  'West Des Moines': { slug: 'West-Des-Moines', id: 20093 },
+  'Ankeny':          { slug: 'Ankeny', id: 414 },
+  'Urbandale':       { slug: 'Urbandale', id: 19116 },
+  'Waukee':          { slug: 'Waukee', id: 19845 },
+  'Johnston':        { slug: 'Johnston', id: 9300 },
+  'Clive':           { slug: 'Clive', id: 3576 },
+  'Grimes':          { slug: 'Grimes', id: 7491 },
+  'Norwalk':         { slug: 'Norwalk', id: 13641 },
+  'Altoona':         { slug: 'Altoona', id: 414 },  // Will resolve dynamically
+  'Pleasant Hill':   { slug: 'Pleasant-Hill', id: 15019 },
+  'Bondurant':       { slug: 'Bondurant', id: 2074 },
+  'Carlisle':        { slug: 'Carlisle', id: 2958 },
+  'Indianola':       { slug: 'Indianola', id: 8847 },
+  'Adel':            { slug: 'Adel', id: 101 },
+  'Van Meter':       { slug: 'Van-Meter', id: 19197 },
+  'Polk City':       { slug: 'Polk-City', id: 15174 },
+  'Windsor Heights': { slug: 'Windsor-Heights', id: 20497 },
+  'Cumming':         { slug: 'Cumming', id: 4487 },
+  'Mitchellville':   { slug: 'Mitchellville', id: 12407 }
 };
 
+// Resolve a suburb name to its Redfin region_id using location autocomplete
+async function resolveRegionId(suburbName) {
+  try {
+    const url = `https://www.redfin.com/stingray/do/location-autocomplete?location=${encodeURIComponent(suburbName + ', IA')}&v=2`;
+    const resp = await fetch(url, { headers: REDFIN_HEADERS, timeout: 10000 });
+    const text = await resp.text();
+    const json = JSON.parse(text.replace(/^{}&&/, ''));
+    
+    if (json.payload && json.payload.sections) {
+      for (const section of json.payload.sections) {
+        if (section.rows) {
+          for (const row of section.rows) {
+            if (row.type === 6 && row.subName && row.subName.includes('IA')) {
+              console.log(`Resolved ${suburbName} -> region_id: ${row.id}`);
+              return row.id;
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`Could not resolve region for ${suburbName}:`, err.message);
+  }
+  return null;
+}
+
+// Search a single suburb via CSV download
+async function searchSuburbCSV(suburbName, filters) {
+  const info = SUBURB_INFO[suburbName];
+  
+  // First try to resolve the actual region ID
+  let regionId = info ? info.id : null;
+  const resolvedId = await resolveRegionId(suburbName);
+  if (resolvedId) regionId = resolvedId;
+  
+  if (!regionId) {
+    console.warn(`No region ID for ${suburbName}, skipping`);
+    return [];
+  }
+
+  const uipt = filters.home_type === 'single family' ? '1' : 
+               filters.home_type === 'condo' ? '2' : 
+               filters.home_type === 'townhouse' ? '3' : '1,2,3';
+
+  const params = new URLSearchParams({
+    al: 1,
+    status: 1,
+    min_price: filters.min_price,
+    max_price: filters.max_price,
+    num_beds: filters.min_beds,
+    min_num_baths: filters.min_baths,
+    num_homes: 350,
+    page_number: 1,
+    sp: true,
+    v: 8,
+    uipt,
+    region_id: regionId,
+    region_type: 6  // city
+  });
+
+  if (filters.min_sqft) params.set('min_listing_approx_size', filters.min_sqft);
+  if (filters.max_sqft) params.set('max_listing_approx_size', filters.max_sqft);
+
+  const url = `https://www.redfin.com/stingray/api/gis-csv?${params}`;
+  console.log(`Searching ${suburbName} (region ${regionId}): ${url}`);
+
+  const resp = await fetch(url, { headers: REDFIN_HEADERS, timeout: 20000 });
+  const text = await resp.text();
+  
+  if (!resp.ok || text.includes('<!DOCTYPE') || text.length < 100) {
+    console.warn(`CSV failed for ${suburbName}: status=${resp.status} len=${text.length}`);
+    return [];
+  }
+
+  console.log(`${suburbName}: got ${text.length} bytes CSV`);
+  return parseCSV(text);
+}
+
+// Main search endpoint
 app.get('/api/search', async (req, res) => {
   try {
     const {
@@ -28,142 +128,72 @@ app.get('/api/search', async (req, res) => {
     } = req.query;
 
     console.log('Search request:', req.query);
-    let listings = [];
-    let method = '';
-    let debugInfo = {};
 
-    // Approach 1: CSV
-    try {
-      console.log('Trying CSV...');
-      listings = await searchCSV({ min_price, max_price, min_beds, min_baths, min_sqft, max_sqft, home_type });
-      if (listings.length > 0) method = 'csv';
-    } catch (err) {
-      debugInfo.csvError = err.message;
-      console.warn('CSV failed:', err.message);
-    }
+    const selectedSuburbs = suburbs 
+      ? suburbs.split(',').map(s => s.trim())
+      : Object.keys(SUBURB_INFO);
 
-    // Approach 2: JSON
-    if (listings.length === 0) {
-      try {
-        console.log('Trying JSON...');
-        listings = await searchJSON({ min_price, max_price, min_beds, min_baths, min_sqft, max_sqft, home_type });
-        if (listings.length > 0) method = 'json';
-      } catch (err) {
-        debugInfo.jsonError = err.message;
-        console.warn('JSON failed:', err.message);
+    const filters = { min_price, max_price, min_beds, min_baths, min_sqft, max_sqft, home_type };
+    const allListings = [];
+    const suburbResults = {};
+
+    // Search each suburb in parallel batches of 3 (be respectful to Redfin)
+    const batchSize = 3;
+    for (let i = 0; i < selectedSuburbs.length; i += batchSize) {
+      const batch = selectedSuburbs.slice(i, i + batchSize);
+      
+      const results = await Promise.all(
+        batch.map(async (suburb) => {
+          try {
+            const listings = await searchSuburbCSV(suburb, filters);
+            suburbResults[suburb] = listings.length;
+            return listings;
+          } catch (err) {
+            console.warn(`Error searching ${suburb}:`, err.message);
+            suburbResults[suburb] = 0;
+            return [];
+          }
+        })
+      );
+
+      results.forEach(listings => allListings.push(...listings));
+
+      // Small delay between batches
+      if (i + batchSize < selectedSuburbs.length) {
+        await new Promise(r => setTimeout(r, 300));
       }
     }
 
-    // Filter by suburbs
-    if (suburbs && listings.length > 0) {
-      const selected = suburbs.split(',').map(s => s.trim().toLowerCase());
-      const filtered = listings.filter(l => {
-        const city = (l.suburb || '').toLowerCase().trim();
-        return selected.some(s => city === s);
-      });
-      if (filtered.length > 0) listings = filtered;
-    }
-
-    // Deduplicate
+    // Deduplicate by address
     const seen = new Set();
-    listings = listings.filter(l => {
+    const unique = allListings.filter(l => {
       const key = l.address.toLowerCase().replace(/[^a-z0-9]/g, '');
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
 
-    listings.sort((a, b) => a.price - b.price);
-    console.log(`Returning ${listings.length} via ${method}`);
+    // Sort by price
+    unique.sort((a, b) => a.price - b.price);
 
-    res.json({ success: listings.length > 0, count: listings.length, method, listings: listings.slice(0, 100), debug: debugInfo });
+    console.log(`Total: ${unique.length} unique listings from ${selectedSuburbs.length} suburbs`);
+    console.log('Per suburb:', suburbResults);
+
+    res.json({
+      success: unique.length > 0,
+      count: unique.length,
+      method: 'per-suburb-csv',
+      listings: unique,
+      suburbCounts: suburbResults
+    });
+
   } catch (err) {
     console.error('Search error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-async function searchCSV(f) {
-  const poly = `${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.south},${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.south},${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.south}`;
-  const uipt = f.home_type === 'single family' ? '1' : f.home_type === 'condo' ? '2' : f.home_type === 'townhouse' ? '3' : '1,2,3';
-  
-  const params = new URLSearchParams({
-    al: 1, status: 1, min_price: f.min_price, max_price: f.max_price,
-    num_beds: f.min_beds, min_num_baths: f.min_baths,
-    num_homes: 350, page_number: 1, sp: true, v: 8, uipt, poly
-  });
-  if (f.min_sqft) params.set('min_listing_approx_size', f.min_sqft);
-  if (f.max_sqft) params.set('max_listing_approx_size', f.max_sqft);
-
-  const url = `https://www.redfin.com/stingray/api/gis-csv?${params}`;
-  console.log('CSV URL:', url);
-  
-  const resp = await fetch(url, { headers: REDFIN_HEADERS, timeout: 20000 });
-  const text = await resp.text();
-  console.log('CSV status:', resp.status, 'len:', text.length, 'preview:', text.substring(0, 150));
-  
-  if (!resp.ok || text.includes('<!DOCTYPE') || text.length < 100) {
-    throw new Error(`Bad CSV response: status=${resp.status} len=${text.length}`);
-  }
-  return parseCSV(text);
-}
-
-async function searchJSON(f) {
-  const poly = `${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.south},${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.north},${DSM_METRO_BOUNDS.east} ${DSM_METRO_BOUNDS.south},${DSM_METRO_BOUNDS.west} ${DSM_METRO_BOUNDS.south}`;
-  const uipt = f.home_type === 'single family' ? '1' : f.home_type === 'condo' ? '2' : f.home_type === 'townhouse' ? '3' : '1,2,3';
-  
-  const params = new URLSearchParams({
-    al: 1, status: 1, min_price: f.min_price, max_price: f.max_price,
-    num_beds: f.min_beds, min_num_baths: f.min_baths,
-    num_homes: 100, page_number: 1, sp: true, v: 8, uipt, poly, render: 'json'
-  });
-  if (f.min_sqft) params.set('min_listing_approx_size', f.min_sqft);
-  if (f.max_sqft) params.set('max_listing_approx_size', f.max_sqft);
-
-  const url = `https://www.redfin.com/stingray/api/gis?${params}`;
-  console.log('JSON URL:', url);
-  
-  const resp = await fetch(url, { headers: REDFIN_HEADERS, timeout: 20000 });
-  let text = await resp.text();
-  console.log('JSON status:', resp.status, 'len:', text.length, 'preview:', text.substring(0, 200));
-  
-  if (!resp.ok || text.includes('<!DOCTYPE')) {
-    throw new Error(`Bad JSON response: status=${resp.status}`);
-  }
-
-  // Redfin prepends "{}&&"
-  text = text.replace(/^{}&&/, '').trim();
-  const data = JSON.parse(text);
-  const homes = data.payload?.homes || [];
-  console.log('Parsed', homes.length, 'homes from JSON');
-
-  return homes.map(h => {
-    const street = typeof h.streetLine === 'object' ? h.streetLine.value : (h.streetLine || '');
-    const city = h.city || '';
-    const state = h.state || 'IA';
-    const zip = h.zip || '';
-    const price = typeof h.price === 'object' ? h.price.value : (h.price || 0);
-    const sqft = typeof h.sqFt === 'object' ? h.sqFt.value : (h.sqFt || null);
-    const yr = typeof h.yearBuilt === 'object' ? h.yearBuilt.value : (h.yearBuilt || null);
-    const dom = h.dom ? (typeof h.dom === 'object' ? h.dom.value : h.dom) : null;
-    const lat = h.latLong?.value?.latitude || h.latitude || null;
-    const lng = h.latLong?.value?.longitude || h.longitude || null;
-    const mlsId = typeof h.mlsId === 'object' ? h.mlsId.value : (h.mlsId || null);
-    const hoa = typeof h.hoa === 'object' ? h.hoa.value : (h.hoa || null);
-    const lot = typeof h.lotSize === 'object' ? h.lotSize.value : (h.lotSize || null);
-    const redUrl = h.url ? `https://www.redfin.com${h.url}` : '';
-    
-    return {
-      address: [street, city, state, zip].filter(Boolean).join(', '),
-      suburb: city || 'Unknown',
-      price, beds: h.beds || 0, baths: h.baths || 0,
-      sqft, yearBuilt: yr, url: redUrl, source: 'Redfin',
-      daysOnMarket: dom, lot, hoa, lat, lng,
-      mlsNumber: mlsId, status: 'Active'
-    };
-  }).filter(l => l.price > 0 && l.address.length > 5);
-}
-
+// Parse Redfin CSV
 function parseCSV(csvText) {
   const lines = csvText.split('\n');
   if (lines.length < 2) return [];
@@ -230,34 +260,54 @@ function parseCSVLine(line) {
 app.get('/api/debug', async (req, res) => {
   const results = {};
   
-  // Test CSV
+  // Test resolving Altoona
   try {
-    const csvUrl = 'https://www.redfin.com/stingray/api/gis-csv?al=1&status=1&min_price=300000&max_price=450000&num_beds=3&min_num_baths=1&num_homes=5&page_number=1&sp=true&v=8&uipt=1,2,3&poly=-93.92 41.45,-93.92 41.82,-93.38 41.82,-93.38 41.45,-93.92 41.45';
-    const r1 = await fetch(csvUrl, { headers: REDFIN_HEADERS, timeout: 15000 });
-    const t1 = await r1.text();
-    results.csv = { status: r1.status, length: t1.length, preview: t1.substring(0, 300), isHTML: t1.includes('<!DOCTYPE') };
-  } catch (e) { results.csv = { error: e.message }; }
+    const id = await resolveRegionId('Altoona');
+    results.altoonaRegionId = id;
+  } catch (e) { results.altoonaResolve = e.message; }
 
-  // Test JSON
+  // Test CSV for Altoona specifically
   try {
-    const jsonUrl = 'https://www.redfin.com/stingray/api/gis?al=1&status=1&min_price=300000&max_price=450000&num_beds=3&min_num_baths=1&num_homes=5&page_number=1&sp=true&v=8&uipt=1,2,3&render=json&poly=-93.92 41.45,-93.92 41.82,-93.38 41.82,-93.38 41.45,-93.92 41.45';
-    const r2 = await fetch(jsonUrl, { headers: REDFIN_HEADERS, timeout: 15000 });
-    const t2 = await r2.text();
-    results.json = { status: r2.status, length: t2.length, preview: t2.substring(0, 300), isHTML: t2.includes('<!DOCTYPE') };
-  } catch (e) { results.json = { error: e.message }; }
-
-  // Test basic redfin access
-  try {
-    const r3 = await fetch('https://www.redfin.com/city/5415/IA/Des-Moines', { headers: REDFIN_HEADERS, timeout: 10000 });
-    results.pageAccess = { status: r3.status, length: (await r3.text()).length };
-  } catch (e) { results.pageAccess = { error: e.message }; }
+    const altoonaId = results.altoonaRegionId || 358;
+    const params = new URLSearchParams({
+      al: 1, status: 1, min_price: 300000, max_price: 450000,
+      num_beds: 3, min_num_baths: 1.5, num_homes: 350,
+      page_number: 1, sp: true, v: 8, uipt: '1,2,3',
+      region_id: altoonaId, region_type: 6
+    });
+    const url = `https://www.redfin.com/stingray/api/gis-csv?${params}`;
+    const r = await fetch(url, { headers: REDFIN_HEADERS, timeout: 15000 });
+    const t = await r.text();
+    const lines = t.split('\n').filter(l => l.trim());
+    results.altoonaCSV = { 
+      status: r.status, length: t.length, 
+      lineCount: lines.length,
+      preview: t.substring(0, 300),
+      isHTML: t.includes('<!DOCTYPE')
+    };
+  } catch (e) { results.altoonaCSV = { error: e.message }; }
 
   res.json(results);
 });
 
+// Location autocomplete endpoint
+app.get('/api/location', async (req, res) => {
+  try {
+    const { query } = req.query;
+    const url = `https://www.redfin.com/stingray/do/location-autocomplete?location=${encodeURIComponent(query)}&v=2`;
+    const resp = await fetch(url, { headers: REDFIN_HEADERS });
+    const text = await resp.text();
+    const json = JSON.parse(text.replace(/^{}&&/, ''));
+    res.json(json);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Health check
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'House Hunter DSM - Redfin Proxy' });
+  res.json({ status: 'ok', service: 'House Hunter DSM - Redfin Proxy v3' });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Redfin proxy running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Redfin proxy v3 running on port ${PORT}`));
