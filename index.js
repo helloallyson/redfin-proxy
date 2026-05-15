@@ -14,30 +14,28 @@ const REDFIN_HEADERS = {
   'Cache-Control': 'no-cache'
 };
 
-// Redfin city URL slugs and IDs for Des Moines metro
-// These come from redfin.com/city/{id}/IA/{City-Name} URLs
-// region_type=6 is city
+// Verified Redfin city IDs from redfin.com/city/{id}/IA/{City} URLs
 const SUBURB_INFO = {
-  'Des Moines':      { slug: 'Des-Moines', id: 5415 },
-  'West Des Moines': { slug: 'West-Des-Moines', id: 20093 },
-  'Ankeny':          { slug: 'Ankeny', id: 414 },
-  'Urbandale':       { slug: 'Urbandale', id: 19116 },
-  'Waukee':          { slug: 'Waukee', id: 19845 },
-  'Johnston':        { slug: 'Johnston', id: 9300 },
-  'Clive':           { slug: 'Clive', id: 3576 },
-  'Grimes':          { slug: 'Grimes', id: 7491 },
-  'Norwalk':         { slug: 'Norwalk', id: 13641 },
-  'Altoona':         { slug: 'Altoona', id: 414 },  // Will resolve dynamically
-  'Pleasant Hill':   { slug: 'Pleasant-Hill', id: 15019 },
-  'Bondurant':       { slug: 'Bondurant', id: 2074 },
-  'Carlisle':        { slug: 'Carlisle', id: 2958 },
-  'Indianola':       { slug: 'Indianola', id: 8847 },
-  'Adel':            { slug: 'Adel', id: 101 },
-  'Van Meter':       { slug: 'Van-Meter', id: 19197 },
-  'Polk City':       { slug: 'Polk-City', id: 15174 },
-  'Windsor Heights': { slug: 'Windsor-Heights', id: 20497 },
-  'Cumming':         { slug: 'Cumming', id: 4487 },
-  'Mitchellville':   { slug: 'Mitchellville', id: 12407 }
+  'Des Moines':      { id: 5415 },
+  'West Des Moines': { id: 20722 },
+  'Ankeny':          { id: 572 },
+  'Urbandale':       { id: 20085 },
+  'Waukee':          { id: 20523 },
+  'Johnston':        { id: 9587 },
+  'Clive':           { id: 3522 },
+  'Grimes':          { id: 7638 },
+  'Norwalk':         { id: 13869 },
+  'Altoona':         { id: 414 },
+  'Pleasant Hill':   { id: 15286 },
+  'Bondurant':       { id: 1978 },
+  'Carlisle':        { id: 2774 },
+  'Indianola':       { id: 8989 },
+  'Adel':            { id: 149 },
+  'Van Meter':       { id: 19407 },
+  'Polk City':       { id: 15402 },
+  'Windsor Heights': { id: 21191 },
+  'Cumming':         { id: 4363 },
+  'Mitchellville':   { id: 12457 }
 };
 
 // Resolve a suburb name to its Redfin region_id using location autocomplete
@@ -302,50 +300,11 @@ app.get('/api/location', async (req, res) => {
 
 // Health check
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'House Hunter DSM - Redfin Proxy v3' });
+  res.json({ status: 'ok', service: 'House Hunter DSM - Redfin Proxy v3', suburbs: Object.keys(SUBURB_INFO) });
 });
-
-// Resolve all region IDs on startup (runs once, logs correct IDs)
-async function resolveAllRegions() {
-  console.log('Resolving region IDs for all suburbs...');
-  for (const [name, info] of Object.entries(SUBURB_INFO)) {
-    try {
-      const url = `https://www.redfin.com/stingray/do/location-autocomplete?location=${encodeURIComponent(name + ', IA')}&v=2`;
-      const resp = await fetch(url, { headers: REDFIN_HEADERS, timeout: 10000 });
-      const text = await resp.text();
-      const json = JSON.parse(text.replace(/^{}&&/, ''));
-      
-      if (json.payload && json.payload.sections) {
-        for (const section of json.payload.sections) {
-          if (section.rows) {
-            for (const row of section.rows) {
-              if (row.type === 6 && row.subName && row.subName.includes('IA')) {
-                if (row.id !== info.id) {
-                  console.log(`UPDATE ${name}: ${info.id} -> ${row.id}`);
-                  SUBURB_INFO[name].id = row.id;
-                } else {
-                  console.log(`OK ${name}: ${info.id}`);
-                }
-                break;
-              }
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(`Could not resolve ${name}:`, err.message);
-    }
-    // Small delay between lookups
-    await new Promise(r => setTimeout(r, 200));
-  }
-  console.log('Region resolution complete. Current IDs:', 
-    Object.fromEntries(Object.entries(SUBURB_INFO).map(([k,v]) => [k, v.id]))
-  );
-}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Redfin proxy v3 running on port ${PORT}`);
-  // Resolve correct region IDs in the background
-  resolveAllRegions().catch(err => console.warn('Startup resolve failed:', err.message));
+  console.log('Suburb IDs:', JSON.stringify(Object.fromEntries(Object.entries(SUBURB_INFO).map(([k,v]) => [k, v.id]))));
 });
