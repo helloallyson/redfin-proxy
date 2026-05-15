@@ -254,15 +254,51 @@ function parseCSVLine(line) {
 app.get('/api/debug', async (req, res) => {
   const results = {};
   
-  for (const [name, info] of Object.entries(SUBURB_INFO)) {
+  // Just test 3 suburbs to keep it fast
+  const testSuburbs = ['Ankeny', 'Grimes', 'Des Moines'];
+  for (const name of testSuburbs) {
     try {
-      const id = await resolveRegionId(name);
-      results[name] = { configured: info.id, resolved: id, match: info.id === id };
-      await new Promise(r => setTimeout(r, 200));
+      const url = `https://www.redfin.com/stingray/do/location-autocomplete?location=${encodeURIComponent(name + ', IA')}&v=2`;
+      const resp = await fetch(url, { headers: REDFIN_HEADERS, timeout: 10000 });
+      const text = await resp.text();
+      results[name] = { 
+        configured: SUBURB_INFO[name]?.id,
+        rawLength: text.length,
+        rawPreview: text.substring(0, 500)
+      };
     } catch (e) {
-      results[name] = { configured: info.id, error: e.message };
+      results[name] = { error: e.message };
     }
+    await new Promise(r => setTimeout(r, 300));
   }
+
+  // Also test a direct CSV search with Des Moines
+  try {
+    const params = new URLSearchParams({
+      al: 1, status: 1, min_price: 300000, max_price: 450000,
+      num_beds: 3, min_num_baths: 1, num_homes: 5,
+      page_number: 1, sp: true, v: 8, uipt: '1,2,3',
+      region_id: 5415, region_type: 6
+    });
+    const url = `https://www.redfin.com/stingray/api/gis-csv?${params}`;
+    const r = await fetch(url, { headers: REDFIN_HEADERS, timeout: 15000 });
+    const t = await r.text();
+    results['CSV_test_type6'] = { status: r.status, length: t.length, preview: t.substring(0, 200) };
+  } catch (e) { results['CSV_test_type6'] = { error: e.message }; }
+
+  // Try with region_type 2 instead
+  try {
+    const params = new URLSearchParams({
+      al: 1, status: 1, min_price: 300000, max_price: 450000,
+      num_beds: 3, min_num_baths: 1, num_homes: 5,
+      page_number: 1, sp: true, v: 8, uipt: '1,2,3',
+      region_id: 5415, region_type: 2
+    });
+    const url = `https://www.redfin.com/stingray/api/gis-csv?${params}`;
+    const r = await fetch(url, { headers: REDFIN_HEADERS, timeout: 15000 });
+    const t = await r.text();
+    results['CSV_test_type2'] = { status: r.status, length: t.length, preview: t.substring(0, 200) };
+  } catch (e) { results['CSV_test_type2'] = { error: e.message }; }
 
   res.json(results);
 });
