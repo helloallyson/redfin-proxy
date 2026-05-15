@@ -250,36 +250,19 @@ function parseCSVLine(line) {
   return result;
 }
 
-// Debug endpoint
+// Debug endpoint - resolves all suburb IDs
 app.get('/api/debug', async (req, res) => {
   const results = {};
   
-  // Test resolving Altoona
-  try {
-    const id = await resolveRegionId('Altoona');
-    results.altoonaRegionId = id;
-  } catch (e) { results.altoonaResolve = e.message; }
-
-  // Test CSV for Altoona specifically
-  try {
-    const altoonaId = results.altoonaRegionId || 358;
-    const params = new URLSearchParams({
-      al: 1, status: 1, min_price: 300000, max_price: 450000,
-      num_beds: 3, min_num_baths: 1.5, num_homes: 350,
-      page_number: 1, sp: true, v: 8, uipt: '1,2,3',
-      region_id: altoonaId, region_type: 6
-    });
-    const url = `https://www.redfin.com/stingray/api/gis-csv?${params}`;
-    const r = await fetch(url, { headers: REDFIN_HEADERS, timeout: 15000 });
-    const t = await r.text();
-    const lines = t.split('\n').filter(l => l.trim());
-    results.altoonaCSV = { 
-      status: r.status, length: t.length, 
-      lineCount: lines.length,
-      preview: t.substring(0, 300),
-      isHTML: t.includes('<!DOCTYPE')
-    };
-  } catch (e) { results.altoonaCSV = { error: e.message }; }
+  for (const [name, info] of Object.entries(SUBURB_INFO)) {
+    try {
+      const id = await resolveRegionId(name);
+      results[name] = { configured: info.id, resolved: id, match: info.id === id };
+      await new Promise(r => setTimeout(r, 200));
+    } catch (e) {
+      results[name] = { configured: info.id, error: e.message };
+    }
+  }
 
   res.json(results);
 });
